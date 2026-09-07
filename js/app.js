@@ -720,7 +720,10 @@ function renderContent() {
     touchNode(node);
     saveState();
   }
-  pageBody.innerHTML = renderMarkdown(normalizedContent);
+  pageBody.innerHTML = /^\s*</.test(normalizedContent)
+    ? sanitizeRenderedHtml(normalizedContent)
+    : renderMarkdown(normalizedContent);
+  hydrateCharts(pageBody);
   enhanceDocumentPage(pageBody);
 
   const titleEl = document.getElementById('pageTitle');
@@ -745,7 +748,7 @@ function sanitizeRenderedHtml(html) {
   const template = document.createElement('template');
   template.innerHTML = String(html || '');
   template.content
-    .querySelectorAll('script, style, iframe, object, embed, form, input, button, textarea, select, link, meta, base, svg, math')
+    .querySelectorAll('script, style, iframe, object, embed, form, input, button, textarea, select, link, meta, base, svg:not(.doc-chart-svg), math')
     .forEach((element) => element.remove());
 
   template.content.querySelectorAll('*').forEach((element) => {
@@ -912,7 +915,20 @@ function renderChartMarkup(source) {
     : chart.type === 'radar'
       ? renderRadarChart(chart)
       : renderCircularChart(chart);
-  return `<figure class="doc-chart" data-chart-type="${escapeAttribute(chart.type)}"><figcaption>${escapeHtml(chart.title)}</figcaption>${svg}${chartLegend(chart)}</figure>`;
+  return `<figure class="doc-chart" data-chart-type="${escapeAttribute(chart.type)}" data-chart-definition="${escapeAttribute(JSON.stringify(chart))}"><figcaption>${escapeHtml(chart.title)}</figcaption>${svg}${chartLegend(chart)}</figure>`;
+}
+
+function hydrateCharts(root) {
+  root.querySelectorAll('.doc-chart[data-chart-definition]').forEach((chartElement) => {
+    if (chartElement.querySelector('.doc-chart-svg')) return;
+    try {
+      const chart = JSON.parse(chartElement.dataset.chartDefinition);
+      const markup = renderChartMarkup(JSON.stringify(chart));
+      chartElement.replaceWith(document.createRange().createContextualFragment(markup));
+    } catch {
+      chartElement.classList.add('chart-error');
+    }
+  });
 }
 
 function renderMarkdown(text) {
@@ -1457,6 +1473,22 @@ function safeMarkdownCaption(value) {
 }
 
 function insertTextAtSelection(textarea, value) {
+  if (textarea.isContentEditable) {
+    const selection = window.getSelection();
+    const hasEditorSelection = selection?.rangeCount
+      && textarea.contains(selection.getRangeAt(0).commonAncestorContainer);
+    textarea.focus();
+    if (!hasEditorSelection) {
+      const range = document.createRange();
+      range.selectNodeContents(textarea);
+      range.collapse(false);
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    }
+    document.execCommand('insertHTML', false, renderMarkdown(value));
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    return;
+  }
   const start = textarea.selectionStart;
   const end = textarea.selectionEnd;
   textarea.setRangeText(value, start, end, 'end');
@@ -1822,6 +1854,11 @@ function renderMediaManager(textarea) {
   const list = document.getElementById('mediaList');
   if (!list) return;
 
+  if (textarea.isContentEditable) {
+    list.innerHTML = `<p class="media-empty">Pengurusan imej tersedia terus dalam dokumen.</p>`;
+    return;
+  }
+
   const images = parseEditorImages(textarea.value);
   if (!images.length) {
     list.innerHTML = `<p class="media-empty">${getText('noImages')}</p>`;
@@ -1963,7 +2000,7 @@ function openMediaEditDialog(textarea, media) {
   captionInput.select();
 }
 
-function openChartBuilderModal(textarea) {
+function openChartBuilderModal(textarea, existingChart = null, targetElement = null) {
   document.querySelector('.chart-builder-backdrop')?.remove();
 
   const backdrop = document.createElement('div');
@@ -1981,17 +2018,17 @@ function openChartBuilderModal(textarea) {
       <div class="chart-builder-fields">
         <div class="chart-builder-field">
           <label for="chartTitleInput">${getText('chartTitle')}</label>
-          <input id="chartTitleInput" type="text" maxlength="120" value="Chart">
+          <input id="chartTitleInput" type="text" maxlength="120" value="${escapeAttribute(existingChart?.title || 'Chart')}">
         </div>
         <div class="chart-builder-field">
           <label for="chartTypeInput">${getText('chartType')}</label>
           <select id="chartTypeInput">
-            <option value="bar">${getText('chartBar')}</option>
-            <option value="line">${getText('chartLine')}</option>
-            <option value="pie">${getText('chartPie')}</option>
-            <option value="doughnut">${getText('chartDoughnut')}</option>
-            <option value="polar">${getText('chartPolar')}</option>
-            <option value="radar">${getText('chartRadar')}</option>
+            <option value="bar" ${existingChart?.type === 'bar' ? 'selected' : ''}>${getText('chartBar')}</option>
+            <option value="line" ${existingChart?.type === 'line' ? 'selected' : ''}>${getText('chartLine')}</option>
+            <option value="pie" ${existingChart?.type === 'pie' ? 'selected' : ''}>${getText('chartPie')}</option>
+            <option value="doughnut" ${existingChart?.type === 'doughnut' ? 'selected' : ''}>${getText('chartDoughnut')}</option>
+            <option value="polar" ${existingChart?.type === 'polar' ? 'selected' : ''}>${getText('chartPolar')}</option>
+            <option value="radar" ${existingChart?.type === 'radar' ? 'selected' : ''}>${getText('chartRadar')}</option>
           </select>
         </div>
       </div>
@@ -2028,7 +2065,10 @@ function openChartBuilderModal(textarea) {
   const preview = backdrop.querySelector('#chartBuilderPreview');
   const status = backdrop.querySelector('#chartBuilderStatus');
   const insertButton = backdrop.querySelector('#chartBuilderInsert');
-  let rows = [
+  let rows = existingChart?.labels?.map((label, index) => ({
+    label,
+    value: String(existingChart.values[index])
+  })) || [
     { label: 'Kategori A', value: '40' },
     { label: 'Kategori B', value: '30' },
     { label: 'Kategori C', value: '20' }
@@ -2121,6 +2161,12 @@ function openChartBuilderModal(textarea) {
   insertButton.addEventListener('click', () => {
     const result = getDefinition();
     if (!result.ok) return;
+    if (targetElement?.isConnected) {
+      targetElement.replaceWith(document.createRange().createContextualFragment(renderChartMarkup(JSON.stringify(result.chart))));
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+      close();
+      return;
+    }
     insertTextAtSelection(textarea, `\n${serializeChartBlock(result.chart)}\n`);
     close();
   });
@@ -2131,6 +2177,10 @@ function openChartBuilderModal(textarea) {
 }
 
 function renderEditor(node) {
+  const initialHtml = /^\s*</.test(node.content || '')
+    ? sanitizeRenderedHtml(node.content || '')
+    : renderMarkdown(node.content || '');
+
   contentEl.innerHTML = `
     <div class="editor-page-heading">
       <div>
@@ -2143,11 +2193,11 @@ function renderEditor(node) {
       <div class="editor-panel">
         <div class="editor-header">
           <div class="editor-header-copy">
-            <span class="editor-kicker">${getText('markdownSupported')}</span>
-            <p>${getText('editorHint')}</p>
+            <span class="editor-kicker">Editor visual</span>
+            <p>Tulis dan format kandungan terus seperti dokumen biasa.</p>
           </div>
           <div class="editor-header-meta">
-            <span class="editor-status-badge">Markdown</span>
+            <span class="editor-status-badge">Visual</span>
             <span class="editor-character-count" id="editorCharacterCount">0 ${getText('characters')}</span>
           </div>
         </div>
@@ -2162,14 +2212,13 @@ function renderEditor(node) {
           </div>
           <div class="editor-tool-panels">
             <div class="editor-toolbar-group editor-tool-panel" data-tool-panel="text">
-              <button class="tb-btn" data-prefix="# " title="${getText('title')}">H</button>
-              <button class="tb-btn" data-prefix="**" data-suffix="**" title="${getText('bold')}"><strong>B</strong></button>
-              <button class="tb-btn" data-prefix="*" data-suffix="*" title="${getText('italic')}"><em>I</em></button>
-              <button class="tb-btn" data-prefix="[" data-suffix="](url)" title="${getText('link')}">↗</button>
-              <button class="tb-btn" data-prefix="- " title="${getText('list')}">☷</button>
-              <button class="tb-btn" data-snippet="- [ ] Tugas\n- [ ] Tugas lain\n" title="${getText('checklist')}">☑</button>
-              <button class="tb-btn" data-prefix="~~~\n" data-suffix="\n~~~" title="${getText('code')}">&lt;/&gt;</button>
-              <button class="tb-btn" data-snippet="| Tajuk | Nilai |\n| --- | --- |\n| Contoh | Data |\n" title="${getText('table')}">▦</button>
+              <button class="tb-btn" data-command="formatBlock" data-value="h2" title="${getText('title')}">H</button>
+              <button class="tb-btn" data-command="bold" title="${getText('bold')}"><strong>B</strong></button>
+              <button class="tb-btn" data-command="italic" title="${getText('italic')}"><em>I</em></button>
+              <button class="tb-btn" data-command="createLink" title="${getText('link')}">↗</button>
+              <button class="tb-btn" data-command="insertUnorderedList" title="${getText('list')}">☷</button>
+              <button class="tb-btn" data-command="insertOrderedList" title="Senarai bernombor">1.</button>
+              <button class="tb-btn" data-command="formatBlock" data-value="pre" title="${getText('code')}">&lt;/&gt;</button>
             </div>
             <div class="editor-toolbar-group editor-tool-panel" data-tool-panel="callout" hidden>
               <button class="tb-btn" data-callout="tip" title="${getText('tip')}">💡</button>
@@ -2185,17 +2234,16 @@ function renderEditor(node) {
               <button class="tb-btn" id="btnUploadMedia" title="${getText('uploadMedia')}">📷</button>
               <button class="tb-btn" id="btnInsertFile" title="${getText('insertFile')}">📎</button>
               <button class="tb-btn" id="btnInsertChart" title="${getText('insertChart')}">📊</button>
-              <button class="tb-btn" id="btnPreview" title="${getText('preview')}">◉</button>
             </div>
           </div>
         </div>
 
         <div class="editor-body">
-          <textarea class="editor-textarea" id="editorTextarea" spellcheck="false">${escapeHtml(node.content || '')}</textarea>
+          <div class="editor-textarea editor-rich-text" id="editorTextarea" contenteditable="true" role="textbox" aria-multiline="true" spellcheck="true">${initialHtml}</div>
         </div>
 
         <div class="editor-actions">
-          <span class="editor-status" id="editorStatus">${getText('markdownSupported')}</span>
+          <span class="editor-status" id="editorStatus">Editor visual</span>
           <div>
             <button class="btn btn-ghost" id="btnCancelEdit">${getText('cancel')}</button>
             <button class="btn btn-primary" id="btnSaveEdit">💾 ${getText('save')}</button>
@@ -2205,19 +2253,28 @@ function renderEditor(node) {
     </div>
   `;
   const textarea = document.getElementById('editorTextarea');
+  textarea.addEventListener('click', (event) => {
+    const chartElement = event.target.closest?.('.doc-chart');
+    if (!chartElement || !textarea.contains(chartElement)) return;
+    try {
+      const chart = JSON.parse(chartElement.dataset.chartDefinition || '');
+      openChartBuilderModal(textarea, chart, chartElement);
+    } catch {
+      chartElement.classList.add('chart-error');
+    }
+  });
   const editorStatus = document.getElementById('editorSaveState');
   const characterCount = document.getElementById('editorCharacterCount');
   const saveButton = document.getElementById('btnSaveEdit');
-  const initialContent = node.content || '';
+  const initialContent = initialHtml;
   const updateEditorMeta = () => {
-    const hasChanges = textarea.value !== initialContent;
-    characterCount.textContent = `${textarea.value.length.toLocaleString()} ${getText('characters')}`;
+    const hasChanges = textarea.innerHTML !== initialContent;
+    characterCount.textContent = `${textarea.textContent.length.toLocaleString()} ${getText('characters')}`;
     editorStatus.textContent = !hasChanges
       ? getText('editorReady')
       : getText('editorUnsaved');
     editorStatus.classList.toggle('is-unsaved', hasChanges);
     saveButton.disabled = !hasChanges;
-    renderMediaManager(textarea);
   };
   textarea.addEventListener('input', updateEditorMeta);
   updateEditorMeta();
@@ -2250,11 +2307,9 @@ function renderEditor(node) {
   document.getElementById('btnInsertFile').addEventListener('click', () => openFileUploadModal(textarea));
   document.getElementById('btnInsertChart').addEventListener('click', () => openChartBuilderModal(textarea));
   contentEl.querySelectorAll('.tb-btn').forEach(button => {
-    if (!button.dataset.prefix && !button.dataset.snippet && !button.dataset.callout) return;
+    if (!button.dataset.command && !button.dataset.callout) return;
     button.addEventListener('click', () => {
-      const start = textarea.selectionStart;
-      const end = textarea.selectionEnd;
-      const selected = textarea.value.slice(start, end) || 'teks';
+      textarea.focus();
 
       if (button.dataset.callout) {
         const variant = button.dataset.callout;
@@ -2268,46 +2323,24 @@ function renderEditor(node) {
           danger: 'DANGER',
           quote: 'QUOTE'
         }[variant] || 'INFO';
-        const replacement = `> [!${label}]\n> ${selected}\n`;
-        textarea.setRangeText(replacement, start, end, 'select');
+        document.execCommand('formatBlock', false, 'blockquote');
         updateEditorMeta();
-        textarea.focus();
         return;
       }
 
-      if (button.dataset.snippet) {
-        const replacement = button.dataset.snippet;
-        textarea.setRangeText(replacement, start, end, 'select');
-        updateEditorMeta();
-        textarea.focus();
-        return;
+      if (button.dataset.command === 'createLink') {
+        const url = window.prompt('Pautan', 'https://');
+        if (url) document.execCommand('createLink', false, url);
+      } else {
+        document.execCommand(button.dataset.command, false, button.dataset.value || null);
       }
-
-      const replacement = `${button.dataset.prefix}${selected}${button.dataset.suffix || ''}`;
-      textarea.setRangeText(replacement, start, end, 'select');
       updateEditorMeta();
-      textarea.focus();
     });
-  });
-  const previewButton = document.getElementById('btnPreview');
-  previewButton.addEventListener('click', () => {
-    if (previewButton.dataset.previewing === 'true') {
-      renderEditor(node);
-      return;
-    }
-    const preview = document.createElement('div');
-    preview.className = 'markdown-body editor-preview';
-    preview.innerHTML = renderMarkdown(textarea.value);
-    textarea.replaceWith(preview);
-    initMediaGallery(preview);
-    previewButton.dataset.previewing = 'true';
-    previewButton.textContent = '✎';
-    previewButton.title = getText('backToEditor');
   });
   document.getElementById('btnCancelEdit').addEventListener('click', renderContent);
   const saveEditor = () => {
-    if (textarea.value === initialContent) return;
-    node.content = textarea.value;
+    if (textarea.innerHTML === initialContent) return;
+    node.content = sanitizeRenderedHtml(textarea.innerHTML);
     touchNode(node);
     saveState();
     renderContent();
