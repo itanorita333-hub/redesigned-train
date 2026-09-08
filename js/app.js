@@ -1546,6 +1546,23 @@ function insertHtmlAtSelection(textarea, html) {
   return true;
 }
 
+function appendImageToGallery(textarea, gallery, caption, src) {
+  if (!gallery?.isConnected) return false;
+  const item = document.createRange().createContextualFragment(buildMediaGalleryMarkup([{
+    type: 'image',
+    src,
+    caption: safeMarkdownCaption(caption)
+  }])).firstElementChild?.firstElementChild;
+  if (!item) return false;
+  gallery.append(item);
+  gallery.className = [...gallery.classList]
+    .filter((name) => !/^media-gallery-\d+$/.test(name))
+    .concat(`media-gallery-${Math.min(gallery.querySelectorAll('.media-item').length, 3)}`)
+    .join(' ');
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  return true;
+}
+
 function insertImageAtSelection(textarea, caption, src) {
   const safeCaption = safeMarkdownCaption(caption);
   const markdown = `\n![${safeCaption}](${src})\n`;
@@ -1591,6 +1608,21 @@ function removeEditorImage(textarea, media) {
   textarea.focus();
 }
 
+function promoteImageToGallery(image) {
+  if (!image?.isConnected || image.closest('.media-gallery')) return image?.closest('.media-gallery') || null;
+  const gallery = document.createElement('div');
+  gallery.className = 'media-gallery media-gallery-1';
+  const item = document.createElement('a');
+  item.className = 'media-item';
+  item.href = image.getAttribute('src') || '';
+  item.dataset.mediaType = 'image';
+  item.setAttribute('aria-label', image.getAttribute('alt') || 'Media');
+  image.replaceWith(gallery);
+  item.append(image);
+  gallery.append(item);
+  return gallery;
+}
+
 function setMediaStatus(message, isError = false) {
   const status = document.getElementById('mediaStatus');
   if (!status) return;
@@ -1598,7 +1630,7 @@ function setMediaStatus(message, isError = false) {
   status.classList.toggle('is-error', isError);
 }
 
-async function handleMediaUpload(files, textarea, captionOverride = '') {
+async function handleMediaUpload(files, textarea, captionOverride = '', targetGallery = null) {
   const selectedFiles = [...(files || [])];
   const imageFiles = selectedFiles.filter(file => file.type.startsWith('image/'));
   if (!imageFiles.length) {
@@ -1615,7 +1647,9 @@ async function handleMediaUpload(files, textarea, captionOverride = '') {
       imageItems.push({ type: 'image', src, caption: safeMarkdownCaption(caption) });
     }
     const markdown = imageItems.map((item) => `![${item.caption}](${item.src})`).join('\n');
-    if (!insertHtmlAtSelection(textarea, buildMediaGalleryMarkup(imageItems))) {
+    if (targetGallery?.isConnected) {
+      imageItems.forEach((item) => appendImageToGallery(textarea, targetGallery, item.caption, item.src));
+    } else if (!insertHtmlAtSelection(textarea, buildMediaGalleryMarkup(imageItems))) {
       insertTextAtSelection(textarea, `\n${markdown}\n`);
     }
     setMediaStatus(getText('imageReady'));
@@ -1788,7 +1822,7 @@ function openFileUploadModal(textarea) {
   nameInput.focus();
 }
 
-function openMediaUploadModal(textarea) {
+function openMediaUploadModal(textarea, targetGallery = null) {
   const existing = document.querySelector('.media-upload-backdrop');
   if (existing) existing.remove();
 
@@ -1804,11 +1838,7 @@ function openMediaUploadModal(textarea) {
         <button type="button" class="icon-btn media-upload-close" aria-label="${getText('close')}">×</button>
       </div>
       <p class="media-upload-hint">${getText('uploadMediaHint')}</p>
-      <div class="media-modal-tabs" role="tablist" aria-label="${getText('mediaManager')}">
-        <button type="button" class="media-modal-tab is-active" id="mediaUploadTab" role="tab" aria-selected="true" aria-controls="mediaUploadPane">${getText('uploadTab')}</button>
-        <button type="button" class="media-modal-tab" id="mediaListTab" role="tab" aria-selected="false" aria-controls="mediaListPane">${getText('imageListTab')}</button>
-      </div>
-      <section id="mediaUploadPane" class="media-modal-pane" role="tabpanel" aria-labelledby="mediaUploadTab">
+      <section id="mediaUploadPane" class="media-modal-pane" role="tabpanel" aria-labelledby="mediaUploadTitle">
         <div class="media-upload-preview" id="mediaUploadPreview" hidden></div>
         <div class="media-upload-file-row">
           <button type="button" class="btn btn-ghost" id="chooseMediaUploadFile">📁 ${getText('selectFile')}</button>
@@ -1821,10 +1851,6 @@ function openMediaUploadModal(textarea) {
         <label class="media-field-label" for="mediaUploadCaption">${getText('imageName')}</label>
         <input id="mediaUploadCaption" type="text" placeholder="${escapeAttribute(getText('imageNamePlaceholder'))}">
         <p class="media-status" id="mediaStatus" aria-live="polite"></p>
-      </section>
-      <section id="mediaListPane" class="media-modal-pane" role="tabpanel" aria-labelledby="mediaListTab" hidden>
-        <div class="media-modal-list-heading">${getText('mediaManager')}</div>
-        <div class="media-list media-modal-list" id="mediaList"></div>
       </section>
       <div class="modal-actions">
         <button type="button" class="btn btn-ghost" id="mediaUploadCancel">${getText('cancel')}</button>
@@ -1842,10 +1868,6 @@ function openMediaUploadModal(textarea) {
   const urlInput = backdrop.querySelector('#mediaUploadUrl');
   const status = backdrop.querySelector('#mediaStatus');
   const submitButton = backdrop.querySelector('#mediaUploadSubmit');
-  const uploadTab = backdrop.querySelector('#mediaUploadTab');
-  const listTab = backdrop.querySelector('#mediaListTab');
-  const uploadPane = backdrop.querySelector('#mediaUploadPane');
-  const listPane = backdrop.querySelector('#mediaListPane');
   let selectedFile = null;
   let previewUrl = '';
 
@@ -1858,19 +1880,6 @@ function openMediaUploadModal(textarea) {
   backdrop.addEventListener('click', (event) => {
     if (event.target === backdrop) close();
   });
-  const setActiveTab = (tab) => {
-    const showList = tab === 'list';
-    uploadTab.classList.toggle('is-active', !showList);
-    listTab.classList.toggle('is-active', showList);
-    uploadTab.setAttribute('aria-selected', String(!showList));
-    listTab.setAttribute('aria-selected', String(showList));
-    uploadPane.hidden = showList;
-    listPane.hidden = !showList;
-    submitButton.hidden = showList;
-  };
-  uploadTab.addEventListener('click', () => setActiveTab('upload'));
-  listTab.addEventListener('click', () => setActiveTab('list'));
-  renderMediaManager(textarea);
   chooseButton.addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', () => {
     selectedFile = fileInput.files[0] || null;
@@ -1921,12 +1930,14 @@ function openMediaUploadModal(textarea) {
         return;
       }
       const caption = captionInput.value.trim() || getText('defaultImageCaption');
-      insertImageAtSelection(textarea, caption, imageUrl);
+      if (!appendImageToGallery(textarea, targetGallery, caption, imageUrl)) {
+        insertImageAtSelection(textarea, caption, imageUrl);
+      }
       close();
       return;
     }
     status.textContent = getText('uploadingImage');
-    const uploaded = await handleMediaUpload([selectedFile], textarea, captionInput.value.trim());
+    const uploaded = await handleMediaUpload([selectedFile], textarea, captionInput.value.trim(), targetGallery);
     if (uploaded) {
       close();
       return;
@@ -1939,59 +1950,23 @@ function openMediaUploadModal(textarea) {
   captionInput.focus();
 }
 
-function renderMediaManager(textarea) {
-  const list = document.getElementById('mediaList');
-  if (!list) return;
-
-  const images = textarea.isContentEditable
-    ? [...textarea.querySelectorAll('img')].map((image, index) => ({
-      id: `editor-image-${index}`,
-      start: 0,
-      end: 0,
-      syntax: 'html',
-      src: image.getAttribute('src') || '',
-      caption: image.getAttribute('alt') || ''
-    })).filter((image) => image.src)
-    : parseEditorImages(textarea.value);
-  if (!images.length) {
-    list.innerHTML = `<p class="media-empty">${getText('noImages')}</p>`;
-    return;
-  }
-
-  list.innerHTML = images.map((media) => `
-    <div class="media-row" data-media-id="${media.id}">
-      <div class="media-thumb">
-        <img src="${escapeAttribute(media.src)}" alt="${escapeAttribute(media.caption || getText('imageName'))}">
-      </div>
-      <div class="media-row-details">
-        <input class="media-name-input" type="text" value="${escapeAttribute(media.caption)}" placeholder="${escapeAttribute(getText('imageNamePlaceholder'))}" aria-label="${escapeAttribute(getText('imageName'))}">
-        <span class="media-source" title="${escapeAttribute(media.src)}">${escapeHtml(media.src)}</span>
-      </div>
-      <button type="button" class="btn btn-ghost media-edit-button">${getText('editImage')}</button>
-    </div>
-  `).join('');
-
-  list.querySelectorAll('.media-row').forEach((row, index) => {
-    const media = images[index];
-    row.querySelector('.media-name-input').addEventListener('change', (event) => {
-      replaceEditorImage(textarea, media, media.src, event.target.value);
-      setMediaStatus(getText('imageUpdated'));
-    });
-    row.querySelector('.media-edit-button').addEventListener('click', () => {
-      openMediaEditDialog(textarea, media);
-    });
-  });
-}
-
 function renderInlineEditorMediaControls(textarea) {
   textarea.querySelectorAll('.editor-media-controls').forEach((controls) => controls.remove());
-  const mediaElements = [
+  const mediaGroups = [
     ...textarea.querySelectorAll('.media-gallery'),
     ...[...textarea.children].filter((element) => element.tagName === 'IMG')
   ];
+  const rows = [];
 
-  mediaElements.forEach((mediaElement) => {
-    const image = mediaElement.matches('img') ? mediaElement : mediaElement.querySelector('img');
+  mediaGroups.forEach((mediaElement) => {
+    mediaElement.classList.add('editor-media-hidden');
+    const images = mediaElement.matches('.media-gallery')
+      ? [...mediaElement.querySelectorAll('.media-item img')]
+      : [mediaElement];
+    images.forEach((image) => rows.push({ mediaElement, image }));
+  });
+
+  rows.forEach(({ mediaElement, image }) => {
     const src = image?.getAttribute('src') || '';
     if (!src) return;
     const media = {
@@ -2007,13 +1982,27 @@ function renderInlineEditorMediaControls(textarea) {
       <img class="editor-media-thumb" src="${escapeAttribute(src)}" alt="${escapeAttribute(media.caption || getText('imageName'))}">
       <span class="editor-media-name">${escapeHtml(media.caption || getText('imageName'))}</span>
       <button type="button" class="btn btn-ghost editor-media-edit">${getText('editImage')}</button>
+      <button type="button" class="btn btn-ghost editor-media-add">${getText('addImage')}</button>
       <button type="button" class="btn btn-danger editor-media-delete">${getText('deleteImage')}</button>
     `;
     controls.querySelector('.editor-media-edit').addEventListener('click', () => openMediaEditDialog(textarea, media));
+    controls.querySelector('.editor-media-add').addEventListener('click', () => {
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNode(controls);
+      range.collapse(false);
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      const targetGallery = mediaElement.matches('.media-gallery')
+        ? mediaElement
+        : promoteImageToGallery(mediaElement);
+      openMediaUploadModal(textarea, targetGallery);
+    });
     controls.querySelector('.editor-media-delete').addEventListener('click', () => {
       confirmModal(getText('confirmDeleteImage'), () => removeEditorImage(textarea, media));
     });
-    mediaElement.after(controls);
+    const previousControls = [...textarea.querySelectorAll('.editor-media-controls')].at(-1);
+    (previousControls || mediaElement).after(controls);
   });
 }
 
@@ -2111,7 +2100,6 @@ function openMediaEditDialog(textarea, media) {
       return;
     }
     replaceEditorImage(textarea, media, nextSource, captionInput.value);
-    renderMediaManager(textarea);
     setMediaStatus(getText('imageUpdated'));
     close();
   });
@@ -2119,7 +2107,6 @@ function openMediaEditDialog(textarea, media) {
   backdrop.querySelector('#deleteMediaButton').addEventListener('click', () => {
     confirmModal(getText('confirmDeleteImage'), () => {
       removeEditorImage(textarea, media);
-      renderMediaManager(textarea);
       setMediaStatus(getText('imageDeleted'));
       close();
     });
@@ -2501,6 +2488,7 @@ function renderEditor(node) {
     if (textarea.innerHTML === initialContent) return;
     const editorContent = textarea.cloneNode(true);
     editorContent.querySelectorAll('.editor-media-controls').forEach((controls) => controls.remove());
+    editorContent.querySelectorAll('.editor-media-hidden').forEach((element) => element.classList.remove('editor-media-hidden'));
     editorContent.querySelectorAll('.editor-chart-spacer').forEach((spacer) => {
       spacer.classList.remove('editor-chart-spacer');
       spacer.removeAttribute('contenteditable');
