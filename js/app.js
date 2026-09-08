@@ -107,6 +107,7 @@ const translations = {
     chartPolar: 'Polar Area',
     chartRadar: 'Radar',
     chartNeedData: 'Masukkan sekurang-kurangnya dua data yang sah.',
+    confirmDeleteChart: 'Padam chart ini daripada kandungan?',
     title: 'Tajuk',
     bold: 'Tebal',
     italic: 'Italik',
@@ -254,6 +255,7 @@ const translations = {
     chartPolar: 'Polar Area',
     chartRadar: 'Radar',
     chartNeedData: 'Enter at least two valid data points.',
+    confirmDeleteChart: 'Delete this chart from the content?',
     title: 'Title',
     bold: 'Bold',
     italic: 'Italic',
@@ -747,9 +749,31 @@ function renderContent() {
 function sanitizeRenderedHtml(html) {
   const template = document.createElement('template');
   template.innerHTML = String(html || '');
+  const textWalker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
+  const literalHtmlNodes = [];
+  while (textWalker.nextNode()) literalHtmlNodes.push(textWalker.currentNode);
+  literalHtmlNodes.forEach((textNode) => {
+    if (!/&lt;\/?(?:div|img|figure)\b/i.test(textNode.nodeValue || '')) return;
+    const decoder = document.createElement('textarea');
+    decoder.innerHTML = textNode.nodeValue;
+    const decoded = decoder.value;
+    if (!/(?:media-gallery|file-attachment-card|<img\b)/i.test(decoded)) return;
+    const fragment = document.createRange().createContextualFragment(decoded);
+    textNode.replaceWith(fragment);
+  });
   template.content
     .querySelectorAll('script, style, iframe, object, embed, form, input, button, textarea, select, link, meta, base, svg:not(.doc-chart-svg), math')
     .forEach((element) => element.remove());
+
+  template.content.querySelectorAll('.file-attachment-card').forEach((card) => {
+    const imageLink = card.querySelector('.file-attachment-open[href]');
+    const imageSource = imageLink?.getAttribute('href') || '';
+    if (!isLikelyImageUrl(imageSource)) return;
+    const image = document.createElement('img');
+    image.src = imageSource;
+    image.alt = card.dataset.fileName || 'Imej';
+    card.replaceWith(image);
+  });
 
   template.content.querySelectorAll('*').forEach((element) => {
     [...element.attributes].forEach((attribute) => {
@@ -915,7 +939,7 @@ function renderChartMarkup(source) {
     : chart.type === 'radar'
       ? renderRadarChart(chart)
       : renderCircularChart(chart);
-  return `<figure class="doc-chart" data-chart-type="${escapeAttribute(chart.type)}" data-chart-definition="${escapeAttribute(JSON.stringify(chart))}"><figcaption>${escapeHtml(chart.title)}</figcaption>${svg}${chartLegend(chart)}</figure>`;
+  return `<figure class="doc-chart" contenteditable="false" data-chart-type="${escapeAttribute(chart.type)}" data-chart-definition="${escapeAttribute(JSON.stringify(chart))}"><figcaption>${escapeHtml(chart.title)}</figcaption>${svg}${chartLegend(chart)}</figure>`;
 }
 
 function hydrateCharts(root) {
@@ -997,7 +1021,7 @@ function renderMarkdown(text) {
     const href = (link.getAttribute('href') || '').trim();
     const label = (link.textContent || '').trim();
     const isLikelyFile = /\.[a-z0-9]{1,8}(?:\?.*)?(?:#.*)?$/i.test(href || '') || /\.[a-z0-9]{1,8}$/i.test(label);
-    if (!href || !isLikelyFile || link.classList.contains('file-attachment-open')) return;
+    if (!href || !isLikelyFile || isLikelyImageUrl(href) || link.classList.contains('file-attachment-open') || link.classList.contains('media-item')) return;
     const isPdf = /\.pdf(?:\?.*)?(?:#.*)?$/i.test(href) || /\.pdf$/i.test(label);
     const sizeText = link.getAttribute('title') || '';
     const cardHtml = buildFileAttachmentCard({
@@ -1134,6 +1158,7 @@ function normalizeLegacyMediaContent(text) {
   return String(text || '').replace(legacyGalleryPattern, (block) => {
     const wrapper = document.createElement('div');
     wrapper.innerHTML = block;
+    if (wrapper.querySelector('.media-item img, .media-item video')) return block;
     const snippets = [];
 
     wrapper.querySelectorAll('.media-item').forEach((item) => {
@@ -1371,6 +1396,14 @@ function isValidImageSource(source) {
   }
 }
 
+function isLikelyImageUrl(source) {
+  try {
+    return /\.(?:png|jpe?g|gif|webp|avif)(?:$|[?#])/i.test(new URL(source, window.location.href).pathname);
+  } catch {
+    return false;
+  }
+}
+
 function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -1474,19 +1507,7 @@ function safeMarkdownCaption(value) {
 
 function insertTextAtSelection(textarea, value) {
   if (textarea.isContentEditable) {
-    const selection = window.getSelection();
-    const hasEditorSelection = selection?.rangeCount
-      && textarea.contains(selection.getRangeAt(0).commonAncestorContainer);
-    textarea.focus();
-    if (!hasEditorSelection) {
-      const range = document.createRange();
-      range.selectNodeContents(textarea);
-      range.collapse(false);
-      selection?.removeAllRanges();
-      selection?.addRange(range);
-    }
-    document.execCommand('insertHTML', false, renderMarkdown(value));
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    insertHtmlAtSelection(textarea, renderMarkdown(value));
     return;
   }
   const start = textarea.selectionStart;
@@ -1496,8 +1517,56 @@ function insertTextAtSelection(textarea, value) {
   textarea.focus();
 }
 
+function insertHtmlAtSelection(textarea, html) {
+  if (!textarea.isContentEditable) return false;
+  const selection = window.getSelection();
+  const hasEditorSelection = selection?.rangeCount
+    && textarea.contains(selection.getRangeAt(0).commonAncestorContainer);
+  textarea.focus();
+  const range = hasEditorSelection
+    ? selection.getRangeAt(0)
+    : document.createRange();
+  if (!hasEditorSelection) {
+    range.selectNodeContents(textarea);
+    range.collapse(false);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  }
+  range.deleteContents();
+  const fragment = range.createContextualFragment(html);
+  const lastNode = fragment.lastChild;
+  range.insertNode(fragment);
+  if (lastNode) {
+    range.setStartAfter(lastNode);
+    range.collapse(true);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  }
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  return true;
+}
+
+function insertImageAtSelection(textarea, caption, src) {
+  const safeCaption = safeMarkdownCaption(caption);
+  const markdown = `\n![${safeCaption}](${src})\n`;
+  const markup = buildMediaGalleryMarkup([{ type: 'image', src, caption: safeCaption }]);
+  if (!insertHtmlAtSelection(textarea, markup)) insertTextAtSelection(textarea, markdown);
+}
+
 function replaceEditorImage(textarea, media, src, caption) {
   const safeCaption = safeMarkdownCaption(caption);
+  if (textarea.isContentEditable) {
+    const image = [...textarea.querySelectorAll('img')].find((candidate) => (
+      candidate.getAttribute('src') === media.src
+      && (!media.caption || candidate.getAttribute('alt') === media.caption)
+    ));
+    if (!image) return;
+    image.setAttribute('src', src);
+    image.setAttribute('alt', safeCaption);
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    textarea.focus();
+    return;
+  }
   const replacement = media.syntax === 'html'
     ? `<img src="${escapeAttribute(src)}" alt="${escapeAttribute(safeCaption)}">`
     : serializeMarkdownImage({ caption: safeCaption, src, title: media.title });
@@ -1507,6 +1576,16 @@ function replaceEditorImage(textarea, media, src, caption) {
 }
 
 function removeEditorImage(textarea, media) {
+  if (textarea.isContentEditable) {
+    const image = [...textarea.querySelectorAll('img')].find((candidate) => (
+      candidate.getAttribute('src') === media.src
+      && (!media.caption || candidate.getAttribute('alt') === media.caption)
+    ));
+    image?.closest('.media-item')?.remove() || image?.remove();
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    textarea.focus();
+    return;
+  }
   textarea.setRangeText('', media.start, media.end, 'end');
   textarea.dispatchEvent(new Event('input', { bubbles: true }));
   textarea.focus();
@@ -1529,13 +1608,16 @@ async function handleMediaUpload(files, textarea, captionOverride = '') {
 
   try {
     if (imageFiles.length) setMediaStatus(getText('uploadingImage'));
-    const imageSnippets = [];
+    const imageItems = [];
     for (const file of imageFiles) {
       const src = await uploadImageToImgBB(file);
       const caption = captionOverride || imageCaptionFromFilename(file.name);
-      imageSnippets.push(`![${safeMarkdownCaption(caption)}](${src})`);
+      imageItems.push({ type: 'image', src, caption: safeMarkdownCaption(caption) });
     }
-    insertTextAtSelection(textarea, `\n${imageSnippets.join('\n')}\n`);
+    const markdown = imageItems.map((item) => `![${item.caption}](${item.src})`).join('\n');
+    if (!insertHtmlAtSelection(textarea, buildMediaGalleryMarkup(imageItems))) {
+      insertTextAtSelection(textarea, `\n${markdown}\n`);
+    }
     setMediaStatus(getText('imageReady'));
     return true;
   } catch (error) {
@@ -1670,20 +1752,27 @@ function openFileUploadModal(textarea) {
 
     try {
       if (selectedFile) {
-        const uploaded = await handleFileUpload([selectedFile], textarea, fileName);
+        const uploaded = selectedFile.type.startsWith('image/')
+          ? await handleMediaUpload([selectedFile], textarea, fileName)
+          : await handleFileUpload([selectedFile], textarea, fileName);
         if (uploaded) {
           close();
           return;
         }
       } else {
         const candidateUrl = new URL(fileUrl, window.location.href).toString();
-        const link = serializeFileLink({
-          name: sanitizeFileName(fileName),
-          href: candidateUrl,
-          size: ''
-        });
-        insertTextAtSelection(textarea, `\n${link}\n`);
-        setMediaStatus(getText('fileLinkReady'));
+        if (isLikelyImageUrl(candidateUrl)) {
+          insertImageAtSelection(textarea, fileName, candidateUrl);
+          setMediaStatus(getText('imageReady'));
+        } else {
+          const link = serializeFileLink({
+            name: sanitizeFileName(fileName),
+            href: candidateUrl,
+            size: ''
+          });
+          insertTextAtSelection(textarea, `\n${link}\n`);
+          setMediaStatus(getText('fileLinkReady'));
+        }
         close();
         return;
       }
@@ -1832,7 +1921,7 @@ function openMediaUploadModal(textarea) {
         return;
       }
       const caption = captionInput.value.trim() || getText('defaultImageCaption');
-      insertTextAtSelection(textarea, `\n![${safeMarkdownCaption(caption)}](${imageUrl})\n`);
+      insertImageAtSelection(textarea, caption, imageUrl);
       close();
       return;
     }
@@ -1854,12 +1943,16 @@ function renderMediaManager(textarea) {
   const list = document.getElementById('mediaList');
   if (!list) return;
 
-  if (textarea.isContentEditable) {
-    list.innerHTML = `<p class="media-empty">Pengurusan imej tersedia terus dalam dokumen.</p>`;
-    return;
-  }
-
-  const images = parseEditorImages(textarea.value);
+  const images = textarea.isContentEditable
+    ? [...textarea.querySelectorAll('img')].map((image, index) => ({
+      id: `editor-image-${index}`,
+      start: 0,
+      end: 0,
+      syntax: 'html',
+      src: image.getAttribute('src') || '',
+      caption: image.getAttribute('alt') || ''
+    })).filter((image) => image.src)
+    : parseEditorImages(textarea.value);
   if (!images.length) {
     list.innerHTML = `<p class="media-empty">${getText('noImages')}</p>`;
     return;
@@ -1887,6 +1980,40 @@ function renderMediaManager(textarea) {
     row.querySelector('.media-edit-button').addEventListener('click', () => {
       openMediaEditDialog(textarea, media);
     });
+  });
+}
+
+function renderInlineEditorMediaControls(textarea) {
+  textarea.querySelectorAll('.editor-media-controls').forEach((controls) => controls.remove());
+  const mediaElements = [
+    ...textarea.querySelectorAll('.media-gallery'),
+    ...[...textarea.children].filter((element) => element.tagName === 'IMG')
+  ];
+
+  mediaElements.forEach((mediaElement) => {
+    const image = mediaElement.matches('img') ? mediaElement : mediaElement.querySelector('img');
+    const src = image?.getAttribute('src') || '';
+    if (!src) return;
+    const media = {
+      id: `editor-image-${src}`,
+      src,
+      caption: image.getAttribute('alt') || '',
+      syntax: 'html'
+    };
+    const controls = document.createElement('div');
+    controls.className = 'editor-media-controls';
+    controls.contentEditable = 'false';
+    controls.innerHTML = `
+      <img class="editor-media-thumb" src="${escapeAttribute(src)}" alt="${escapeAttribute(media.caption || getText('imageName'))}">
+      <span class="editor-media-name">${escapeHtml(media.caption || getText('imageName'))}</span>
+      <button type="button" class="btn btn-ghost editor-media-edit">${getText('editImage')}</button>
+      <button type="button" class="btn btn-danger editor-media-delete">${getText('deleteImage')}</button>
+    `;
+    controls.querySelector('.editor-media-edit').addEventListener('click', () => openMediaEditDialog(textarea, media));
+    controls.querySelector('.editor-media-delete').addEventListener('click', () => {
+      confirmModal(getText('confirmDeleteImage'), () => removeEditorImage(textarea, media));
+    });
+    mediaElement.after(controls);
   });
 }
 
@@ -1984,6 +2111,7 @@ function openMediaEditDialog(textarea, media) {
       return;
     }
     replaceEditorImage(textarea, media, nextSource, captionInput.value);
+    renderMediaManager(textarea);
     setMediaStatus(getText('imageUpdated'));
     close();
   });
@@ -1991,6 +2119,7 @@ function openMediaEditDialog(textarea, media) {
   backdrop.querySelector('#deleteMediaButton').addEventListener('click', () => {
     confirmModal(getText('confirmDeleteImage'), () => {
       removeEditorImage(textarea, media);
+      renderMediaManager(textarea);
       setMediaStatus(getText('imageDeleted'));
       close();
     });
@@ -2051,6 +2180,7 @@ function openChartBuilderModal(textarea, existingChart = null, targetElement = n
       <div id="chartBuilderPreview" class="chart-builder-preview"></div>
       <p id="chartBuilderStatus" class="chart-builder-status" aria-live="polite"></p>
       <div class="modal-actions chart-builder-actions">
+        ${targetElement ? `<button type="button" class="btn btn-danger" id="chartBuilderDelete">${getText('delete')}</button>` : ''}
         <button type="button" class="btn btn-ghost" id="chartBuilderCancel">${getText('cancel')}</button>
         <button type="button" class="btn btn-primary" id="chartBuilderInsert">📊 ${getText('insertChart')}</button>
       </div>
@@ -2083,6 +2213,14 @@ function openChartBuilderModal(textarea, existingChart = null, targetElement = n
   };
   backdrop.querySelector('.chart-builder-close').addEventListener('click', close);
   backdrop.querySelector('#chartBuilderCancel').addEventListener('click', close);
+  backdrop.querySelector('#chartBuilderDelete')?.addEventListener('click', () => {
+    confirmModal(getText('confirmDeleteChart'), () => {
+      if (!targetElement?.isConnected) return;
+      targetElement.remove();
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+      close();
+    });
+  });
   backdrop.addEventListener('click', event => {
     if (event.target === backdrop) close();
   });
@@ -2253,6 +2391,26 @@ function renderEditor(node) {
     </div>
   `;
   const textarea = document.getElementById('editorTextarea');
+  textarea.querySelectorAll('.doc-chart, .media-gallery').forEach((mediaElement) => {
+    const nextElement = mediaElement.nextElementSibling;
+    if (nextElement?.classList.contains('editor-chart-spacer')) return;
+    const spacer = document.createElement('p');
+    spacer.className = 'editor-chart-spacer';
+    spacer.contentEditable = 'true';
+    spacer.innerHTML = '<br>';
+    mediaElement.after(spacer);
+  });
+  [...textarea.children]
+    .filter((element) => element.tagName === 'IMG')
+    .forEach((imageElement) => {
+      const nextElement = imageElement.nextElementSibling;
+      if (nextElement?.classList.contains('editor-chart-spacer')) return;
+      const spacer = document.createElement('p');
+      spacer.className = 'editor-chart-spacer';
+      spacer.contentEditable = 'true';
+      spacer.innerHTML = '<br>';
+      imageElement.after(spacer);
+    });
   textarea.addEventListener('click', (event) => {
     const chartElement = event.target.closest?.('.doc-chart');
     if (!chartElement || !textarea.contains(chartElement)) return;
@@ -2266,7 +2424,7 @@ function renderEditor(node) {
   const editorStatus = document.getElementById('editorSaveState');
   const characterCount = document.getElementById('editorCharacterCount');
   const saveButton = document.getElementById('btnSaveEdit');
-  const initialContent = initialHtml;
+  const initialContent = textarea.innerHTML;
   const updateEditorMeta = () => {
     const hasChanges = textarea.innerHTML !== initialContent;
     characterCount.textContent = `${textarea.textContent.length.toLocaleString()} ${getText('characters')}`;
@@ -2275,6 +2433,7 @@ function renderEditor(node) {
       : getText('editorUnsaved');
     editorStatus.classList.toggle('is-unsaved', hasChanges);
     saveButton.disabled = !hasChanges;
+    renderInlineEditorMediaControls(textarea);
   };
   textarea.addEventListener('input', updateEditorMeta);
   updateEditorMeta();
@@ -2340,7 +2499,14 @@ function renderEditor(node) {
   document.getElementById('btnCancelEdit').addEventListener('click', renderContent);
   const saveEditor = () => {
     if (textarea.innerHTML === initialContent) return;
-    node.content = sanitizeRenderedHtml(textarea.innerHTML);
+    const editorContent = textarea.cloneNode(true);
+    editorContent.querySelectorAll('.editor-media-controls').forEach((controls) => controls.remove());
+    editorContent.querySelectorAll('.editor-chart-spacer').forEach((spacer) => {
+      spacer.classList.remove('editor-chart-spacer');
+      spacer.removeAttribute('contenteditable');
+      if (!spacer.textContent.trim()) spacer.remove();
+    });
+    node.content = sanitizeRenderedHtml(editorContent.innerHTML);
     touchNode(node);
     saveState();
     renderContent();
