@@ -1546,6 +1546,154 @@ function insertHtmlAtSelection(textarea, html) {
   return true;
 }
 
+function applyCalloutToSelection(textarea, variant) {
+  if (!textarea.isContentEditable) return false;
+
+  const selection = window.getSelection();
+  const hasEditorSelection = selection?.rangeCount
+    && textarea.contains(selection.getRangeAt(0).commonAncestorContainer);
+  const range = hasEditorSelection ? selection.getRangeAt(0) : document.createRange();
+  if (!hasEditorSelection) {
+    range.selectNodeContents(textarea);
+    range.collapse(false);
+  }
+  const selectedTrailingParagraph = range.commonAncestorContainer.nodeType === Node.TEXT_NODE
+    ? range.commonAncestorContainer.parentElement?.closest('.editor-trailing-paragraph')
+    : range.commonAncestorContainer.closest?.('.editor-trailing-paragraph');
+  const isEmptyTrailingParagraph = selectedTrailingParagraph
+    && !selectedTrailingParagraph.textContent.trim();
+  if (isEmptyTrailingParagraph) range.selectNode(selectedTrailingParagraph);
+
+  const body = document.createElement('div');
+  body.className = 'callout-body';
+  const selectedContent = isEmptyTrailingParagraph ? null : range.cloneContents();
+  if (selectedContent && (selectedContent.textContent.trim() || selectedContent.childNodes.length)) {
+    body.append(selectedContent);
+  } else {
+    body.innerHTML = '<p>Tulis kandungan di sini...</p>';
+  }
+
+  const iconMap = {
+    tip: '💡', info: 'ℹ️', note: '📝', warn: '⚠️',
+    important: '❗', success: '✅', danger: '⛔', quote: '❝'
+  };
+  const labelMap = {
+    tip: getText('tip'), info: getText('info'), note: getText('note'),
+    warn: getText('warning'), important: getText('important'),
+    success: getText('success'), danger: getText('danger'), quote: getText('quote')
+  };
+  const callout = document.createElement('div');
+  callout.className = `callout callout-${variant}`;
+  callout.innerHTML = `<div class="callout-header"><span class="callout-icon">${iconMap[variant] || iconMap.info}</span><span>${labelMap[variant] || labelMap.info}</span></div>`;
+  callout.append(body);
+
+  range.deleteContents();
+  range.insertNode(callout);
+  range.setStartAfter(callout);
+  range.collapse(true);
+  if (isEmptyTrailingParagraph) {
+    const trailingParagraph = document.createElement('p');
+    trailingParagraph.className = 'editor-trailing-paragraph';
+    trailingParagraph.innerHTML = '<br>';
+    callout.after(trailingParagraph);
+  }
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  return true;
+}
+
+function ensureEditorTrailingParagraph(textarea) {
+  const lastElement = textarea.lastElementChild;
+  if (lastElement?.classList.contains('editor-trailing-paragraph')) return lastElement;
+
+  const paragraph = document.createElement('p');
+  paragraph.className = 'editor-trailing-paragraph';
+  paragraph.innerHTML = '<br>';
+  textarea.append(paragraph);
+  return paragraph;
+}
+
+function buildEditorTableMarkup(rowCount, columnCount) {
+  const rows = Array.from({ length: rowCount }, (_, rowIndex) => {
+    const cells = Array.from({ length: columnCount }, (_, columnIndex) => {
+      const tag = rowIndex === 0 ? 'th' : 'td';
+      const label = rowIndex === 0 ? `Tajuk ${columnIndex + 1}` : 'Isi kandungan';
+      return `<${tag}>${label}</${tag}>`;
+    }).join('');
+    return `<tr>${cells}</tr>`;
+  }).join('');
+  return `<div class="editor-table-wrap"><table><thead>${rows.split('</tr>')[0]}</tr></thead><tbody>${rows.split('</tr>').slice(1).filter(Boolean).map(row => `${row}</tr>`).join('')}</tbody></table></div>`;
+}
+
+function insertTableAtSelection(textarea) {
+  const rowCount = Number.parseInt(window.prompt('Bilangan baris (2-12)', '3'), 10);
+  const columnCount = Number.parseInt(window.prompt('Bilangan lajur (2-8)', '3'), 10);
+  if (!Number.isInteger(rowCount) || !Number.isInteger(columnCount)
+    || rowCount < 2 || rowCount > 12 || columnCount < 2 || columnCount > 8) return;
+
+  const selection = window.getSelection();
+  const hasEditorSelection = selection?.rangeCount
+    && textarea.contains(selection.getRangeAt(0).commonAncestorContainer);
+  const range = hasEditorSelection ? selection.getRangeAt(0) : document.createRange();
+  if (!hasEditorSelection) {
+    range.selectNodeContents(textarea);
+    range.collapse(false);
+  }
+  const container = range.commonAncestorContainer;
+  const trailingParagraph = (container.nodeType === Node.TEXT_NODE
+    ? container.parentElement
+    : container).closest?.('.editor-trailing-paragraph');
+  const isEmptyTrailingParagraph = trailingParagraph && !trailingParagraph.textContent.trim();
+  if (isEmptyTrailingParagraph) range.selectNode(trailingParagraph);
+
+  range.deleteContents();
+  const fragment = range.createContextualFragment(buildEditorTableMarkup(rowCount, columnCount));
+  const tableWrap = fragment.firstElementChild;
+  range.insertNode(fragment);
+  const afterTable = document.createElement('p');
+  afterTable.className = 'editor-trailing-paragraph';
+  afterTable.innerHTML = '<br>';
+  tableWrap.after(afterTable);
+  range.setStart(afterTable, 0);
+  range.collapse(true);
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function getSelectedEditorTable(textarea) {
+  const selection = window.getSelection();
+  if (!selection?.rangeCount) return null;
+  const container = selection.getRangeAt(0).commonAncestorContainer;
+  const element = container.nodeType === Node.TEXT_NODE ? container.parentElement : container;
+  const table = element.closest?.('table');
+  return table && textarea.contains(table) ? table : null;
+}
+
+function addTableRow(textarea) {
+  const table = getSelectedEditorTable(textarea);
+  if (!table) return;
+  const columnCount = table.rows[0]?.cells.length || 0;
+  if (!columnCount || table.rows.length >= 30) return;
+  const row = table.insertRow(-1);
+  for (let index = 0; index < columnCount; index += 1) {
+    row.insertCell().textContent = 'Isi kandungan';
+  }
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function addTableColumn(textarea) {
+  const table = getSelectedEditorTable(textarea);
+  if (!table || table.rows[0]?.cells.length >= 15) return;
+  [...table.rows].forEach((row, rowIndex) => {
+    const cell = row.insertCell(-1);
+    cell.textContent = rowIndex === 0 ? `Tajuk ${row.cells.length}` : 'Isi kandungan';
+    if (rowIndex === 0) cell.outerHTML = cell.outerHTML.replace('<td', '<th').replace('</td>', '</th>');
+  });
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 function appendImageToGallery(textarea, gallery, caption, src) {
   if (!gallery?.isConnected) return false;
   const item = document.createRange().createContextualFragment(buildMediaGalleryMarkup([{
@@ -2344,6 +2492,9 @@ function renderEditor(node) {
               <button class="tb-btn" data-command="insertUnorderedList" title="${getText('list')}">☷</button>
               <button class="tb-btn" data-command="insertOrderedList" title="Senarai bernombor">1.</button>
               <button class="tb-btn" data-command="formatBlock" data-value="pre" title="${getText('code')}">&lt;/&gt;</button>
+              <button class="tb-btn" data-command="insertTable" title="${getText('table')}">▦</button>
+              <button class="tb-btn tb-btn-text" data-command="addTableRow" title="Tambah row">+ Row</button>
+              <button class="tb-btn tb-btn-text" data-command="addTableColumn" title="Tambah column">+ Col</button>
             </div>
             <div class="editor-toolbar-group editor-tool-panel" data-tool-panel="callout" hidden>
               <button class="tb-btn" data-callout="tip" title="${getText('tip')}">💡</button>
@@ -2398,6 +2549,17 @@ function renderEditor(node) {
       spacer.innerHTML = '<br>';
       imageElement.after(spacer);
     });
+  const trailingParagraph = ensureEditorTrailingParagraph(textarea);
+  textarea.addEventListener('click', (event) => {
+    if (event.target !== textarea) return;
+    trailingParagraph.focus();
+    const range = document.createRange();
+    range.selectNodeContents(trailingParagraph);
+    range.collapse(true);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  });
   textarea.addEventListener('click', (event) => {
     const chartElement = event.target.closest?.('.doc-chart');
     if (!chartElement || !textarea.contains(chartElement)) return;
@@ -2454,22 +2616,13 @@ function renderEditor(node) {
   document.getElementById('btnInsertChart').addEventListener('click', () => openChartBuilderModal(textarea));
   contentEl.querySelectorAll('.tb-btn').forEach(button => {
     if (!button.dataset.command && !button.dataset.callout) return;
+    button.addEventListener('mousedown', (event) => event.preventDefault());
     button.addEventListener('click', () => {
       textarea.focus();
 
       if (button.dataset.callout) {
         const variant = button.dataset.callout;
-        const label = {
-          tip: 'TIP',
-          info: 'INFO',
-          note: 'NOTE',
-          warn: 'WARNING',
-          important: 'IMPORTANT',
-          success: 'SUCCESS',
-          danger: 'DANGER',
-          quote: 'QUOTE'
-        }[variant] || 'INFO';
-        document.execCommand('formatBlock', false, 'blockquote');
+        applyCalloutToSelection(textarea, variant);
         updateEditorMeta();
         return;
       }
@@ -2477,6 +2630,12 @@ function renderEditor(node) {
       if (button.dataset.command === 'createLink') {
         const url = window.prompt('Pautan', 'https://');
         if (url) document.execCommand('createLink', false, url);
+      } else if (button.dataset.command === 'insertTable') {
+        insertTableAtSelection(textarea);
+      } else if (button.dataset.command === 'addTableRow') {
+        addTableRow(textarea);
+      } else if (button.dataset.command === 'addTableColumn') {
+        addTableColumn(textarea);
       } else {
         document.execCommand(button.dataset.command, false, button.dataset.value || null);
       }
@@ -2493,6 +2652,9 @@ function renderEditor(node) {
       spacer.classList.remove('editor-chart-spacer');
       spacer.removeAttribute('contenteditable');
       if (!spacer.textContent.trim()) spacer.remove();
+    });
+    editorContent.querySelectorAll('.editor-trailing-paragraph').forEach((paragraph) => {
+      if (!paragraph.textContent.trim()) paragraph.remove();
     });
     node.content = sanitizeRenderedHtml(editorContent.innerHTML);
     touchNode(node);

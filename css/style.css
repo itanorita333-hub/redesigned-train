@@ -1221,13 +1221,46 @@ body.edit-mode .sidebar-footer.edit-only { display: flex !important; }
 .callout-info .callout-icon { color: #1d4ed8; }
 
 .callout-warn {
-  border-color: rgba(220, 38, 38, 0.28);
+  border-color: rgba(217, 119, 6, 0.34);
 }
 .callout-warn .callout-header {
-  background: rgba(220, 38, 38, 0.12);
-  color: #b91c1c;
+  background: rgba(245, 158, 11, 0.16);
+  color: #92400e;
 }
-.callout-warn .callout-icon { color: #b91c1c; }
+.callout-warn .callout-icon { color: #b45309; }
+
+.callout-note {
+  border-color: rgba(139, 92, 246, 0.28);
+}
+.callout-note .callout-header {
+  background: rgba(139, 92, 246, 0.12);
+  color: #6d28d9;
+}
+.callout-note .callout-icon { color: #7c3aed; }
+
+.callout-important {
+  border-color: rgba(190, 24, 93, 0.3);
+}
+.callout-important .callout-header {
+  background: rgba(236, 72, 153, 0.12);
+  color: #9d174d;
+}
+.callout-important .callout-icon { color: #be185d; }
+
+.callout-quote {
+  border-color: rgba(71, 85, 105, 0.3);
+  border-left: 4px solid #64748b;
+}
+.callout-quote .callout-header {
+  background: rgba(100, 116, 139, 0.12);
+  color: #334155;
+}
+.callout-quote .callout-body {
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 1.05em;
+  font-style: italic;
+}
+.callout-quote .callout-icon { color: #475569; }
 
 .callout-success {
   border-color: rgba(16, 185, 129, 0.28);
@@ -1323,8 +1356,44 @@ body.edit-mode .sidebar-footer.edit-only { display: flex !important; }
   display: block;
   margin: 1em 0;
 }
-.markdown-body table { border-collapse: collapse; width: 100%; }
-.markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 8px 12px; }
+.markdown-body table,
+.editor-rich-text table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, .06);
+}
+.markdown-body th, .markdown-body td,
+.editor-rich-text th, .editor-rich-text td {
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+.markdown-body th, .editor-rich-text th {
+  background: #0f766e;
+  color: #ffffff;
+  font-weight: 750;
+}
+.markdown-body tr:nth-child(even) td,
+.editor-rich-text tr:nth-child(even) td { background: var(--bg-soft); }
+.markdown-body tr:hover td,
+.editor-rich-text tr:hover td { background: rgba(49, 104, 255, .06); }
+.markdown-body tr > :last-child,
+.editor-rich-text tr > :last-child { border-right: 0; }
+.markdown-body tbody tr:last-child > *,
+.editor-rich-text tbody tr:last-child > * { border-bottom: 0; }
+.editor-table-wrap {
+  max-width: 100%;
+  margin: 1em 0;
+  overflow-x: auto;
+}
+.editor-table-wrap table { min-width: 420px; }
 
 /* ===== Analytics charts ===== */
 .doc-chart {
@@ -1549,8 +1618,8 @@ body.edit-mode .sidebar-footer.edit-only { display: flex !important; }
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 12px 16px;
-  padding: 14px 16px;
+  gap: 16px 20px;
+  padding: 18px 20px;
   background: var(--bg-soft);
   box-shadow: 0 4px 12px rgba(15, 23, 42, .08);
   border-bottom: 1px solid var(--border);
@@ -1559,16 +1628,16 @@ body.edit-mode .sidebar-footer.edit-only { display: flex !important; }
   display: flex;
   align-items: center;
   flex-shrink: 0;
-  gap: 8px;
-  padding-right: 16px;
+  gap: 10px;
+  padding-right: 20px;
   border-right: 1px solid var(--border);
 }
 .editor-tool-mode {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  min-height: 32px;
-  padding: 6px 10px;
+  min-height: 38px;
+  padding: 8px 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg);
@@ -1596,6 +1665,9 @@ body.edit-mode .sidebar-footer.edit-only { display: flex !important; }
 .editor-tool-panels {
   flex: 1;
   min-width: 0;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
 }
 .editor-tool-panel[hidden] {
   display: none;
@@ -1603,7 +1675,9 @@ body.edit-mode .sidebar-footer.edit-only { display: flex !important; }
 .editor-toolbar-group {
   display: flex;
   align-items: center;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: 10px;
+  width: 100%;
 }
 .editor-toolbar-label {
   color: var(--text-muted);
@@ -1617,7 +1691,7 @@ body.edit-mode .sidebar-footer.edit-only { display: flex !important; }
   gap: 3px;
 }
 .editor-toolbar .tb-btn {
-  width: 32px; height: 32px;
+  width: 40px; height: 40px;
   display: flex; align-items: center; justify-content: center;
   border: 1px solid transparent;
   border-radius: 8px;
@@ -1628,13 +1702,20 @@ body.edit-mode .sidebar-footer.edit-only { display: flex !important; }
   cursor: pointer;
   transition: all 0.15s ease;
 }
+.editor-toolbar .tb-btn:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.editor-toolbar .tb-btn-text {
+  width: auto;
+  min-width: 62px;
+  padding: 0 10px;
+  font-size: 11px;
+}
 .editor-toolbar .tb-btn:hover {
   background: rgba(148, 163, 184, 0.12);
   border-color: var(--border);
-}
-.editor-toolbar .tb-btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
 }
 .editor-toolbar .tb-sep { width: 1px; background: var(--border); margin: 4px 4px; }
 .editor-body {
@@ -1758,6 +1839,11 @@ body.edit-mode .sidebar-footer.edit-only { display: flex !important; }
 .editor-chart-spacer {
   min-height: 34px;
   margin: 0 0 12px;
+  cursor: text;
+}
+.editor-trailing-paragraph {
+  min-height: 1.75em;
+  margin: 0;
   cursor: text;
 }
 .editor-rich-text img {
@@ -2546,7 +2632,9 @@ body.edit-mode .sidebar-footer.edit-only { display: flex !important; }
     justify-content: flex-start;
   }
   .editor-toolbar {
-    gap: 10px;
+    align-items: stretch;
+    gap: 14px;
+    padding: 16px;
   }
   .editor-tool-switcher {
     width: 100%;
@@ -2556,9 +2644,11 @@ body.edit-mode .sidebar-footer.edit-only { display: flex !important; }
   }
   .editor-tool-panels {
     width: 100%;
+    min-height: 52px;
   }
   .editor-toolbar-group {
     width: 100%;
+    gap: 10px;
   }
   .editor-actions {
     flex-direction: column;
