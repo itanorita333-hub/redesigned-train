@@ -1694,6 +1694,19 @@ function addTableColumn(textarea) {
   textarea.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
+function deleteSelectedTable(textarea) {
+  const table = getSelectedEditorTable(textarea);
+  if (!table) return;
+  const tableWrap = table.closest('.editor-table-wrap') || table;
+  const nextParagraph = tableWrap.nextElementSibling;
+  tableWrap.remove();
+  if (!nextParagraph?.classList.contains('editor-trailing-paragraph')) {
+    ensureEditorTrailingParagraph(textarea);
+  }
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  textarea.focus();
+}
+
 function appendImageToGallery(textarea, gallery, caption, src) {
   if (!gallery?.isConnected) return false;
   const item = document.createRange().createContextualFragment(buildMediaGalleryMarkup([{
@@ -2495,6 +2508,7 @@ function renderEditor(node) {
               <button class="tb-btn" data-command="insertTable" title="${getText('table')}">▦</button>
               <button class="tb-btn tb-btn-text" data-command="addTableRow" title="Tambah row">+ Row</button>
               <button class="tb-btn tb-btn-text" data-command="addTableColumn" title="Tambah column">+ Col</button>
+              <button class="tb-btn tb-btn-text tb-btn-danger" data-command="deleteTable" title="Padam table">Delete Table</button>
             </div>
             <div class="editor-toolbar-group editor-tool-panel" data-tool-panel="callout" hidden>
               <button class="tb-btn" data-callout="tip" title="${getText('tip')}">💡</button>
@@ -2636,6 +2650,8 @@ function renderEditor(node) {
         addTableRow(textarea);
       } else if (button.dataset.command === 'addTableColumn') {
         addTableColumn(textarea);
+      } else if (button.dataset.command === 'deleteTable') {
+        deleteSelectedTable(textarea);
       } else {
         document.execCommand(button.dataset.command, false, button.dataset.value || null);
       }
