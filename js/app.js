@@ -19,6 +19,7 @@ import {
 import { getDefaultEditorToolMode } from '../src/edit-mode.js';
 import { parseMarkdownImages, serializeMarkdownImage } from '../src/media-markdown.js';
 import { buildFileAttachmentCard, sanitizeFileName, serializeFileLink } from '../src/file-markdown.js';
+import { buildMapMarkup, parseLocationInput } from '../src/map-markdown.js';
 
 const STORAGE_KEY = 'docbook_data_v1';
 const THEME_KEY = 'docbook_theme';
@@ -91,6 +92,18 @@ const translations = {
     mediaTools: 'Media',
     chart: 'Chart',
     insertChart: 'Masukkan chart',
+    insertMap: 'Masukkan map',
+    mapBuilderTitle: 'Tambah map',
+    mapLabel: 'Nama lokasi',
+    mapLatitude: 'Latitude',
+    mapLongitude: 'Longitude',
+    mapLink: 'Link lokasi',
+    mapLinkHint: 'Boleh isi link Google Maps atau OpenStreetMap untuk isi koordinat automatik.',
+    useCurrentLocation: 'Gunakan lokasi semasa',
+    mapNeedLocation: 'Sila isi latitude dan longitude, atau link lokasi yang mengandungi koordinat.',
+    locationUnavailable: 'Lokasi semasa tidak tersedia. Sila semak izin browser.',
+    returnToLocation: 'Kembali ke lokasi asal',
+    confirmDeleteMap: 'Padam map ini daripada kandungan?',
     chartBuilderHint: 'Masukkan data anda sendiri dan pilih bentuk chart yang sesuai.',
     chartTitle: 'Tajuk chart',
     chartType: 'Jenis chart',
@@ -239,6 +252,18 @@ const translations = {
     mediaTools: 'Media',
     chart: 'Chart',
     insertChart: 'Insert chart',
+    insertMap: 'Insert map',
+    mapBuilderTitle: 'Add map',
+    mapLabel: 'Location name',
+    mapLatitude: 'Latitude',
+    mapLongitude: 'Longitude',
+    mapLink: 'Location link',
+    mapLinkHint: 'Paste a Google Maps or OpenStreetMap link to fill coordinates automatically.',
+    useCurrentLocation: 'Use current location',
+    mapNeedLocation: 'Enter latitude and longitude, or a location link containing coordinates.',
+    locationUnavailable: 'Current location is unavailable. Check the browser permission.',
+    returnToLocation: 'Return to original location',
+    confirmDeleteMap: 'Delete this map from the content?',
     chartBuilderHint: 'Enter your own data and choose the chart style that fits.',
     chartTitle: 'Chart title',
     chartType: 'Chart type',
@@ -762,8 +787,22 @@ function sanitizeRenderedHtml(html) {
     textNode.replaceWith(fragment);
   });
   template.content
-    .querySelectorAll('script, style, iframe, object, embed, form, input, button, textarea, select, link, meta, base, svg:not(.doc-chart-svg), math')
+    .querySelectorAll('script, style, object, embed, form, input, button, textarea, select, link, meta, base, svg:not(.doc-chart-svg), math')
     .forEach((element) => element.remove());
+  template.content.querySelectorAll('iframe').forEach((iframe) => {
+    const src = iframe.getAttribute('src') || '';
+    let isAllowedMap = false;
+    try {
+      const url = new URL(src, window.location.href);
+      isAllowedMap = iframe.closest('.doc-map')
+        && url.protocol === 'https:'
+        && url.hostname === 'www.openstreetmap.org'
+        && url.pathname === '/export/embed.html';
+    } catch {
+      isAllowedMap = false;
+    }
+    if (!isAllowedMap) iframe.remove();
+  });
 
   template.content.querySelectorAll('.file-attachment-card').forEach((card) => {
     const imageLink = card.querySelector('.file-attachment-open[href]');
@@ -1053,7 +1092,30 @@ function enhanceDocumentPage(pageBody) {
   }
 
   initMediaGallery(pageBody);
+  initDocumentMaps(pageBody);
 
+
+function initDocumentMaps(root) {
+  root.querySelectorAll('.doc-map[data-map-lat][data-map-lon]').forEach((map) => {
+    const latitude = Number(map.dataset.mapLat);
+    const longitude = Number(map.dataset.mapLon);
+    const iframe = map.querySelector('iframe');
+    if (!iframe || !Number.isFinite(latitude) || !Number.isFinite(longitude)) return;
+
+    if (map.querySelector('.doc-map-reset')) return;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'doc-map-reset';
+    button.title = getText('returnToLocation');
+    button.setAttribute('aria-label', getText('returnToLocation'));
+    button.innerHTML = '<i class="fa-solid fa-location-crosshairs" aria-hidden="true"></i>';
+    button.addEventListener('click', () => {
+      const resetUrl = buildMapEmbedUrl(latitude, longitude);
+      iframe.src = `${resetUrl}&reset=${Date.now()}`;
+    });
+    map.append(button);
+  });
+}
   pageBody.querySelectorAll('.file-attachment-share').forEach((button) => {
     button.addEventListener('click', async (event) => {
       event.preventDefault();
@@ -2462,6 +2524,97 @@ function openChartBuilderModal(textarea, existingChart = null, targetElement = n
   titleInput.select();
 }
 
+function openMapBuilderModal(textarea, existingMap = null, targetElement = null) {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  const existingLabel = existingMap?.querySelector('.doc-map-heading strong')?.textContent?.trim() || '';
+  const existingLink = existingMap?.dataset.mapLink || '';
+  backdrop.innerHTML = `
+    <div class="modal map-builder-modal" role="dialog" aria-modal="true" aria-labelledby="mapBuilderTitle">
+      <h3 id="mapBuilderTitle">${getText('mapBuilderTitle')}</h3>
+      <label class="map-builder-field"><span>${getText('mapLabel')}</span><input id="mapLabelInput" type="text" value="${escapeAttribute(existingLabel)}" placeholder="Contoh: Kedai / pejabat"></label>
+      <div class="map-builder-coordinate-grid">
+        <label class="map-builder-field"><span>${getText('mapLatitude')}</span><input id="mapLatitudeInput" type="number" step="any" min="-90" max="90" value="${escapeAttribute(existingMap?.dataset.mapLat || '')}" placeholder="3.1390"></label>
+        <label class="map-builder-field"><span>${getText('mapLongitude')}</span><input id="mapLongitudeInput" type="number" step="any" min="-180" max="180" value="${escapeAttribute(existingMap?.dataset.mapLon || '')}" placeholder="101.6869"></label>
+      </div>
+      <label class="map-builder-field"><span>${getText('mapLink')}</span><input id="mapLinkInput" type="url" value="${escapeAttribute(existingLink)}" placeholder="https://maps.google.com/?q=3.139,101.6869"></label>
+      <p class="map-builder-hint">${getText('mapLinkHint')}</p>
+      <p class="map-builder-status" id="mapBuilderStatus" role="status"></p>
+      <div class="map-builder-actions">
+        <button class="btn btn-ghost" id="mapCurrentLocation" type="button">${getText('useCurrentLocation')}</button>
+        <span class="map-builder-spacer"></span>
+        ${targetElement ? `<button class="btn btn-danger" id="mapDelete" type="button">${getText('delete')}</button>` : ''}
+        <button class="btn btn-ghost" id="mapCancel" type="button">${getText('cancel')}</button>
+        <button class="btn btn-primary" id="mapInsert" type="button">${targetElement ? getText('save') : getText('insertMap')}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(backdrop);
+
+  const latitudeInput = backdrop.querySelector('#mapLatitudeInput');
+  const longitudeInput = backdrop.querySelector('#mapLongitudeInput');
+  const linkInput = backdrop.querySelector('#mapLinkInput');
+  const status = backdrop.querySelector('#mapBuilderStatus');
+  const close = () => backdrop.remove();
+  const setStatus = (message, isError = false) => {
+    status.textContent = message;
+    status.classList.toggle('is-error', isError);
+  };
+
+  linkInput.addEventListener('input', () => {
+    const location = parseLocationInput({ link: linkInput.value });
+    if (!location) return;
+    latitudeInput.value = location.latitude;
+    longitudeInput.value = location.longitude;
+    setStatus(`${location.latitude}, ${location.longitude}`);
+  });
+  backdrop.querySelector('#mapCurrentLocation').addEventListener('click', () => {
+    if (!navigator.geolocation) {
+      setStatus(getText('locationUnavailable'), true);
+      return;
+    }
+    setStatus('...');
+    navigator.geolocation.getCurrentPosition((position) => {
+      latitudeInput.value = position.coords.latitude.toFixed(7);
+      longitudeInput.value = position.coords.longitude.toFixed(7);
+      setStatus(`${latitudeInput.value}, ${longitudeInput.value}`);
+    }, () => setStatus(getText('locationUnavailable'), true), { enableHighAccuracy: true, timeout: 10000 });
+  });
+  backdrop.querySelector('#mapCancel').addEventListener('click', close);
+  backdrop.querySelector('#mapDelete')?.addEventListener('click', () => {
+    confirmModal(getText('confirmDeleteMap'), () => {
+      targetElement?.remove();
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+      close();
+    });
+  });
+  backdrop.addEventListener('click', (event) => {
+    if (event.target === backdrop) close();
+  });
+  backdrop.querySelector('#mapInsert').addEventListener('click', () => {
+    const location = parseLocationInput({
+      latitude: latitudeInput.value,
+      longitude: longitudeInput.value,
+      link: linkInput.value
+    });
+    if (!location) {
+      setStatus(getText('mapNeedLocation'), true);
+      return;
+    }
+    const markup = buildMapMarkup({
+      ...location,
+      label: backdrop.querySelector('#mapLabelInput').value.trim() || 'Location'
+    });
+    if (targetElement?.isConnected) {
+      targetElement.replaceWith(document.createRange().createContextualFragment(markup));
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+      close();
+      return;
+    }
+    if (insertHtmlAtSelection(textarea, markup)) close();
+  });
+  backdrop.querySelector('#mapLabelInput').focus();
+}
+
 function renderEditor(node) {
   const initialHtml = /^\s*</.test(node.content || '')
     ? sanitizeRenderedHtml(node.content || '')
@@ -2524,6 +2677,7 @@ function renderEditor(node) {
               <button class="tb-btn" id="btnUploadMedia" title="${getText('uploadMedia')}">📷</button>
               <button class="tb-btn" id="btnInsertFile" title="${getText('insertFile')}">📎</button>
               <button class="tb-btn" id="btnInsertChart" title="${getText('insertChart')}">📊</button>
+              <button class="tb-btn" id="btnInsertMap" title="${getText('insertMap')}">📍</button>
             </div>
           </div>
         </div>
@@ -2543,7 +2697,7 @@ function renderEditor(node) {
     </div>
   `;
   const textarea = document.getElementById('editorTextarea');
-  textarea.querySelectorAll('.doc-chart, .media-gallery').forEach((mediaElement) => {
+  textarea.querySelectorAll('.doc-chart, .media-gallery, .doc-map').forEach((mediaElement) => {
     const nextElement = mediaElement.nextElementSibling;
     if (nextElement?.classList.contains('editor-chart-spacer')) return;
     const spacer = document.createElement('p');
@@ -2575,6 +2729,12 @@ function renderEditor(node) {
     selection?.addRange(range);
   });
   textarea.addEventListener('click', (event) => {
+    const mapElement = event.target.closest?.('.doc-map');
+    if (mapElement && textarea.contains(mapElement) && !event.target.closest('.doc-map-reset')) {
+      event.preventDefault();
+      openMapBuilderModal(textarea, mapElement, mapElement);
+      return;
+    }
     const chartElement = event.target.closest?.('.doc-chart');
     if (!chartElement || !textarea.contains(chartElement)) return;
     try {
@@ -2628,6 +2788,7 @@ function renderEditor(node) {
   document.getElementById('btnUploadMedia').addEventListener('click', () => openMediaUploadModal(textarea));
   document.getElementById('btnInsertFile').addEventListener('click', () => openFileUploadModal(textarea));
   document.getElementById('btnInsertChart').addEventListener('click', () => openChartBuilderModal(textarea));
+  document.getElementById('btnInsertMap').addEventListener('click', () => openMapBuilderModal(textarea));
   contentEl.querySelectorAll('.tb-btn').forEach(button => {
     if (!button.dataset.command && !button.dataset.callout) return;
     button.addEventListener('mousedown', (event) => event.preventDefault());
